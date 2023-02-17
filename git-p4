@@ -4402,7 +4402,7 @@ class P4Unshelve(Command):
     def renameBranch(self, branch_name):
         """Rename the existing branch to branch_name.N ."""
 
-        found = True
+        found = False
         for i in range(0, 1000):
             backup_branch_name = "{0}.{1}".format(branch_name, i)
             if not gitBranchExists(backup_branch_name):
