@@ -1,0 +1,216 @@
+#!/bin/bash
+#
+# Utility script to create or update P4 changelists from git commits.
+#
+# Copyright (c) 2023 Pete Lewis
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+warn() { echo "$*" >&2 ; }
+die() { echo "$*" >&2 ; exit 1; }
+
+usage() {
+    echo "git-p4-shelve --action [--options...] [--] [commits...]
+
+    Actions:
+        --shelve-new        -N      Only shelve commits unknown to p4.
+    
+        --update-existing   -E      Only update shelves that already exist.
+
+        --update-or-shelve  -U      If a commit does corresponds to a shelf,
+                                    update the shelf; otherwise, create a new
+                                    shelf.
+
+        --print                     Print what shelves correspond to commits.
+
+        --help                      Print this help and quit.
+
+    Options:
+        --client <client>   -c      Set the p4 client. By default, this will be
+                                    assumed from the 'git-p4.client' git config,
+                                    or \$P4CLIENT).
+
+        --dry-run           -n      Don't actually do anything. Just print what
+                                    would be done.
+
+    Commits:
+        Commits can be a single commit hash, a range, or other refspec parseable
+        by git, e.g.
+
+            git-p4-shelve -U HEAD  # only shelve the top commit
+            git-p4-shelve -U HEAD~3..HEAD  # only shelve this range of commits
+
+        If no commit is specified, the default is all commits based atop
+        p4/master:
+
+            git-p4-shelve -U p4/master..HEAD
+"
+    exit 0
+}
+
+validate_arg_2() {
+    [ -n "$2" ] || die "$1: expected value"
+}
+
+get_p4_cl_description() {
+    local clnum="$1"
+    p4 change -o "$clnum" | awk -v RS="Description:\n" \
+        '{ rec=$0 } END { print rec }' | sed -r '/^$/d' | \
+        sed -r 's/^[[:space:]]*//g'
+}
+
+find_p4_cl_for_git_commit() {
+    local git_commit="$1"
+    local git_commit_message="$(git log --format=%B -n 1 "${git_commit}")"
+    local git_commit_message_short="${git_commit_message:0:25}"
+    
+    while read -r change ; do
+        local p4_cl_description="$(get_p4_cl_description "$change")"
+        if [ "$p4_cl_description" = "$git_commit_message" ]; then
+            echo "$change"
+            return 0
+        fi
+    done < <(echo "$p4_changes" | grep -F "$git_commit_message_short" | \
+        awk '{print $2}')
+    return 1
+}
+
+git_exec_or_dry_run() {
+    if [ -n "$do_dry_run" ]; then
+        echo "$@"
+    else
+        "$@"
+    fi
+}
+
+commit_new_shelves() {
+    local cmdline=( git p4 submit --shelve )
+    for i in "$@"; do
+        cmdline+=( --commit "$i" )
+    done
+    git_exec_or_dry_run "${cmdline[@]}"
+}
+
+# todo: annoyingly, while git-p4 allows us to specify multiple shelves, it won't
+# allow multiple --commits here unless they're in a contiguous range. At this
+# point in the script, the commit range has already been rev-list'd into single
+# commits, so we'll have to submit each commit individually :( This could be
+# optimized if we could pass down the original commit ranges, perhaps.
+commit_update_mapped_shelves() {
+    local existing_cls=( git p4 submit )
+    local commits=( )
+    local commit_map
+    for i in "$@"; do
+        readarray -d '=' -t commit_map < <(echo -n "$i")
+        local cmdline=( git p4 submit --update-shelve "${commit_map[1]}"
+            --commit "${commit_map[0]}" )
+        git_exec_or_dry_run "${cmdline[@]}"
+    done
+}
+
+operation_print() {
+    for git_commit in "$@"; do
+        local p4_cl="$(find_p4_cl_for_git_commit "$git_commit" || echo "-")"
+        echo "$git_commit $p4_cl"
+    done
+}
+
+operation_shelve_new() {
+    local commits_to_shelve=( )
+    for git_commit in "$@"; do
+        if ! find_p4_cl_for_git_commit "$git_commit" >/dev/null; then
+            commits_to_shelve+=( "$git_commit" )
+        fi
+    done
+    commit_new_shelves "${commits_to_shelve[@]}"
+}
+
+operation_update_existing() {
+    local existing_commits=( )
+    for git_commit in "$@"; do
+        local p4_cl="$(find_p4_cl_for_git_commit "$git_commit")"
+        [ -n "$p4_cl" ] && existing_commits+=( "$git_commit=$p4_cl" )
+    done
+    commit_update_mapped_shelves "${existing_commits[@]}"
+}
+
+operation_update_or_shelve() {
+    new_commits=( )
+    existing_commits=( )
+
+    for git_commit in "$@"; do
+        local p4_cl="$(find_p4_cl_for_git_commit "$git_commit")"
+        if [ -n "$p4_cl" ]; then
+            existing_commits+=( "$git_commit=$p4_cl" )
+        else
+            new_commits+=( "$git_commit" )
+        fi
+    done
+    commit_update_mapped_shelves "${existing_commits[@]}"
+    commit_new_shelves "${new_commits[@]}"
+}
+
+operation="print"
+
+while [[ $1 =~ -.* ]]; do
+    case "$1" in
+    --user|-u) validate_arg_2 "$1" "$2"; p4_user="$2" ; shift ;;
+    --client|-c) validate_arg_2 "$1" "$2"; p4_client="$2" ; shift ;;
+    --dry-run|-n) do_dry_run="yes" ;;
+    --print|-p) operation="print" ;;
+    --shelve-new|-N) operation="shelve-new" ;;
+    --update-existing|-E) operation="update-existing" ;;
+    --update-or-shelve|-U) operation="update-or-shelve" ;;
+    --help) usage ;;
+    --) shift ; break ;;
+    esac
+    shift
+done
+
+git_commits=( )
+while [ -n "$1" ]; do
+    if [[ "$1" == *..* ]]; then
+        readarray -t new_git_commits < <(git rev-list "$1")
+        git_commits+=( "${new_git_commits[@]}" )
+    else
+        git_commits+=( "$1" )
+    fi
+    shift
+done
+
+if [[ "${#git_commits[@]}" = "0" ]]; then
+    readarray -t git_commits < <(git rev-list --reverse p4/master..HEAD)
+fi
+
+[ -n "$p4_client" ] || p4_client="$(git config --get git-p4.client)"
+[ -n "$p4_client" ] || p4_client="$P4CLIENT"
+[ -n "$p4_client" ] || \
+    die "Can't find P4 client spec. Please set P4CLIENT or git-p4.client."
+
+p4_client_options=( )
+p4_user_options=( )
+[ -z "$p4_client" ] || p4_client_options+=( -c "$p4_client" )
+p4_changes="$(p4 changes -s pending -r "${p4_client_options[@]}")"
+
+case "$operation" in
+print) operation_print "${git_commits[@]}" ;;
+shelve-new) operation_shelve_new "${git_commits[@]}" ;;
+update-existing) operation_update_existing "${git_commits[@]}" ;;
+update-or-shelve) operation_update_or_shelve "${git_commits[@]}" ;;
+esac
