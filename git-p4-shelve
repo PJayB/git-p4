@@ -162,8 +162,12 @@ operation_update_or_shelve() {
             new_commits+=( "$git_commit" )
         fi
     done
-    commit_update_mapped_shelves "${existing_commits[@]}"
-    commit_new_shelves "${new_commits[@]}"
+    if [[ ${#existing_commits[@]} > 0 ]]; then
+        commit_update_mapped_shelves "${existing_commits[@]}"
+    fi
+    if [[ ${#new_commits[@]} > 0 ]]; then
+        commit_new_shelves "${new_commits[@]}"
+    fi
 }
 
 operation="print"
