@@ -57,9 +57,17 @@ usage() {
             git-p4-shelve -U HEAD~3..HEAD  # only shelve this range of commits
 
         If no commit is specified, the default is all commits based atop
-        p4/master:
+        p4/master. This is equivalent to:
 
             git-p4-shelve -U p4/master..HEAD
+
+        Commits can also be explictly mapped to existing P4 changelists using
+        the '<git ref>=<p4 CL>' syntax: 
+
+            git-p4-shelve -E HEAD=1234
+
+        NOTE: Commits passed to the --shelve-new action mapped with '=' will be
+        ignored.
 "
     exit 0
 }
