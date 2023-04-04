@@ -65,9 +65,6 @@ usage() {
         the '<git ref>=<p4 CL>' syntax: 
 
             git-p4-shelve -E HEAD=1234
-
-        NOTE: Commits passed to the --shelve-new action mapped with '=' will be
-        ignored.
 "
     exit 0
 }
@@ -132,7 +129,18 @@ commit_update_mapped_shelves() {
     done
 }
 
-get_git_commit_and_p4_cl() {
+get_git_commit_and_p4_cl_no_search() {
+    local input="$1"
+    local git_commit_var="$2"
+    local p4_cl_var="$3"
+    # handles for <SHA>=<CL#> syntax
+    local commit_map
+    readarray -d '=' -t commit_map < <(echo -n "$input")
+    export "$git_commit_var=${commit_map[0]}"
+    export "$p4_cl_var=${commit_map[1]}"
+}
+
+get_git_commit_and_p4_cl_search() {
     local input="$1"
     local git_commit_var="$2"
     local p4_cl_var="$3"
@@ -153,7 +161,7 @@ operation_print() {
     local git_commit
     local p4_cl
     for input in "$@"; do
-        get_git_commit_and_p4_cl "$input" git_commit p4_cl
+        get_git_commit_and_p4_cl_search "$input" git_commit p4_cl
         [ -n "$p4_cl" ] || p4_cl="-"
         echo "$git_commit $p4_cl"
     done
@@ -165,8 +173,9 @@ operation_shelve_new() {
     local git_commit
     local p4_cl
     for input in "$@"; do
-        get_git_commit_and_p4_cl "$input" git_commit p4_cl
-        [ -z "$p4_cl" ] && commits_to_shelve+=( "$git_commit" )
+        get_git_commit_and_p4_cl_no_search "$input" git_commit p4_cl
+        [ -z "$p4_cl" ] || die "New shelves don't support commit mapping."
+        commits_to_shelve+=( "$git_commit" )
     done
     commit_new_shelves "${commits_to_shelve[@]}"
 }
@@ -177,8 +186,10 @@ operation_update_existing() {
     local git_commit
     local p4_cl
     for input in "$@"; do
-        get_git_commit_and_p4_cl "$input" git_commit p4_cl
-        [ -n "$p4_cl" ] && existing_commits+=( "$git_commit=$p4_cl" )
+        get_git_commit_and_p4_cl_search "$input" git_commit p4_cl
+        [ -n "$p4_cl" ] || die "Couldn't find existing p4 changelist for" \
+            "$git_commit. Consider mapping with '$git_commit=<CL#>'."
+        existing_commits+=( "$git_commit=$p4_cl" )
     done
     commit_update_mapped_shelves "${existing_commits[@]}"
 }
@@ -190,7 +201,7 @@ operation_update_or_shelve() {
     local git_commit
     local p4_cl
     for input in "$@"; do
-        get_git_commit_and_p4_cl "$input" git_commit p4_cl
+        get_git_commit_and_p4_cl_search "$input" git_commit p4_cl
         if [ -n "$p4_cl" ]; then
             existing_commits+=( "$git_commit=$p4_cl" )
         else
