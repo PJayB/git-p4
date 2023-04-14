@@ -238,6 +238,9 @@ while [ -n "$1" ]; do
     if [[ "$1" == *..* ]]; then
         readarray -t new_git_commits < <(git rev-list "$1")
         git_commits+=( "${new_git_commits[@]}" )
+    elif read < <(git branch --list "$1"); then
+        readarray -t new_git_commits < <(git rev-list "p4/master..$1")
+        git_commits+=( "${new_git_commits[@]}" )
     else
         git_commits+=( "$1" )
     fi
