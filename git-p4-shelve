@@ -218,7 +218,7 @@ operation_update_or_shelve() {
 
 operation="print"
 
-while [[ $1 =~ -.* ]]; do
+while [[ $1 =~ ^-.* ]]; do
     case "$1" in
     --user|-u) validate_arg_2 "$1" "$2"; p4_user="$2" ; shift ;;
     --client|-c) validate_arg_2 "$1" "$2"; p4_client="$2" ; shift ;;
