@@ -107,7 +107,15 @@ then
     fi
 else
     # New branch
-    git_edit_commit_msg=no
+    if [ "$git_steal_commit_msg" = "yes" ]; then
+        # Get the commit message from the current branch
+        git_commit_args+=( --reuse-message="${current_branch[@]}" )
+        # Force this on, as it's likely we'll want to edit this
+        git_edit_commit_msg=yes
+    else
+        # Force this off, as 'git commit' will do it anyway
+        git_edit_commit_msg=no
+    fi
     git switch -C "$new_branch"
     git reset --soft "$merge_base"
     if git commit "${git_commit_args[@]}"; then
