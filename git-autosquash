@@ -28,13 +28,17 @@ Options:
 
 git_commit_args=( )
 git_steal_commit_msg=yes
+git_edit_commit_msg=no
 force_new_branch=no
 while [[ $1 =~ ^-.* ]]; do
     case "$1" in
     -m|-F)      git_commit_args+=( "$1" "$2" )
                 git_steal_commit_msg=no
+                git_edit_commit_msg=no
                 shift ;;
-    -r)         git_steal_commit_msg=no ;;
+    -r)         git_commit_args=( )
+                git_steal_commit_msg=yes
+                git_edit_commit_msg=yes ;;
     --force)    force_new_branch=yes ;;
     --help)     usage ; exit 0 ;;
     --)         shift ; break ;;
@@ -98,12 +102,22 @@ then
     fi
     if git commit "${git_commit_args[@]}"; then
         echo "Squashed to existing branch '$new_branch'"
+    else
+        exit 1
     fi
 else
     # New branch
+    git_edit_commit_msg=no
     git switch -C "$new_branch"
     git reset --soft "$merge_base"
     if git commit "${git_commit_args[@]}"; then
         echo "Squashed to new branch '$new_branch'"
+    else
+        exit 1
     fi
+fi
+
+# Edit the commit message?
+if [ "yes" = "$git_edit_commit_msg" ]; then
+    git commit --amend
 fi

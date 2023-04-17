@@ -258,13 +258,17 @@ while [[ $1 =~ ^-.* ]]; do
 done
 
 if [ "$autosquash" = "yes" ]; then
-    if [ -n "$1" ]; then
+    if [[ $1 =~ ^[0-9]+$ ]]; then
+        squash_p4_commit="=$1"
+    elif [ -n "$1" ]; then
         die "--squash is incompatible with other parameters."
     fi
     # Squash all commits into a new branch, and then shelve the branch
     branch_name="p4-squashed/$(git branch --show-current)"
     if git-autosquash "${autosquash_options[@]}" p4/master "$branch_name"; then
-        git_commits=( "$branch_name" )
+        git_commits=( "${branch_name}${squash_p4_commit}" )
+    else
+        die "Autosquash failed. Aborting."
     fi
 else
     [ -z "${autosquash_options[*]}" ] || usage_error
