@@ -25,7 +25,7 @@
 warn() { echo "$*" >&2 ; }
 die() { echo "$*" >&2 ; exit 1; }
 
-usage() {
+print_usage() {
     echo "git-p4-shelve --action [--options...] [--] [commits...]
 
     Actions:
@@ -72,7 +72,16 @@ usage() {
 
             git-p4-shelve -E HEAD=1234
 "
+}
+
+usage() {
+    print_usage
     exit 0
+}
+
+usage_error() {
+    print_usage >&2
+    exit 1
 }
 
 validate_arg_2() {
@@ -224,6 +233,8 @@ operation_update_or_shelve() {
 
 operation="print"
 
+autosquash_options=( )
+
 while [[ $1 =~ ^-.* ]]; do
     case "$1" in
     --user|-u) validate_arg_2 "$1" "$2"; p4_user="$2" ; shift ;;
@@ -236,6 +247,12 @@ while [[ $1 =~ ^-.* ]]; do
     --update-or-shelve|-U) operation="update-or-shelve" ;;
     --help) usage ;;
     --) shift ; break ;;
+
+    # Autosquash options
+    -r|--force) autosquash_options+=( "$1" ) ; shift ;;
+    -m|-F)      autosquash_options+=( "$1" "$2" ) ; shift ;;
+
+    *) usage_error ;;
     esac
     shift
 done
@@ -246,10 +263,12 @@ if [ "$autosquash" = "yes" ]; then
     fi
     # Squash all commits into a new branch, and then shelve the branch
     branch_name="p4-squashed/$(git branch --show-current)"
-    if git-autosquash p4/master "$branch_name"; then
+    if git-autosquash "${autosquash_options[@]}" p4/master "$branch_name"; then
         git_commits=( "$branch_name" )
     fi
 else
+    [ -z "${autosquash_options[*]}" ] || usage_error
+
     git_commits=( )
     while [ -n "$1" ]; do
         if [[ "$1" == *..* ]]; then

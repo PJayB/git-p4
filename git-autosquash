@@ -11,9 +11,42 @@
 set -e
 die() { echo "$*" >&2 ; exit 1 ; }
 
+usage() {
+    echo "Usage: $0 [<options...>] <base branch> [<new branch>]
+
+Options:
+    --force             Force create a new branch, even if it exists
+    -m <message>        The commit message to use
+    -F <file>           The file to read the commit message from
+    -r                  Reword the existing commit message
+
+    <base branch>       The merge base of the current branch, e.g. 'main'
+    <new branch>        The name of the squashed branch (default:
+                        'squashed/<current branch name>')
+"
+}
+
+git_commit_args=( )
+git_steal_commit_msg=yes
+force_new_branch=no
+while [[ $1 =~ ^-.* ]]; do
+    case "$1" in
+    -m|-F)      git_commit_args+=( "$1" "$2" )
+                git_steal_commit_msg=no
+                shift ;;
+    -r)         git_steal_commit_msg=no ;;
+    --force)    force_new_branch=yes ;;
+    --help)     usage ; exit 0 ;;
+    --)         shift ; break ;;
+    *)          usage ; exit 1 ;;
+    esac
+    shift
+done
+
 main_branch="$1"
 if [ -z "$main_branch" ]; then
-    die "Usage: $0 <main branch> [<new branch name>]"
+    usage
+    exit 1
 fi
 
 if ! git rev-parse --verify "$main_branch" >/dev/null 2>&1 ; then
@@ -39,7 +72,9 @@ trap "git switch '$current_branch' 2>/dev/null || \
     die 'Failed to switch back to $current_branch'" EXIT
 
 # If the branch exists, take the commit message from it
-if git rev-parse --verify "$new_branch" >/dev/null 2>&1 ; then
+if [ "no" = "$force_new_branch" ] && \
+    git rev-parse --verify "$new_branch" >/dev/null 2>&1
+then
     # Existing branch
     git switch "$new_branch"
 
@@ -58,14 +93,17 @@ if git rev-parse --verify "$new_branch" >/dev/null 2>&1 ; then
     git reset --soft "$merge_base"
 
     # Make a new commit
-    if git commit --reuse-message="${original_commits[@]}"; then
+    if [ "$git_steal_commit_msg" = "yes" ]; then
+        git_commit_args+=( --reuse-message="${original_commits[@]}" )
+    fi
+    if git commit "${git_commit_args[@]}"; then
         echo "Squashed to existing branch '$new_branch'"
     fi
 else
     # New branch
     git switch -C "$new_branch"
     git reset --soft "$merge_base"
-    if git commit; then
+    if git commit "${git_commit_args[@]}"; then
         echo "Squashed to new branch '$new_branch'"
     fi
 fi
