@@ -3,16 +3,17 @@
 # A utility to squash all commits into a single commit on another branch.
 #
 # All commits since the specified commit or branch will be squashed into
-# a branch called "squashed/<current-branch>". If this branch doesn't exist,
-# a new commit will be made. If the branch exists, the commit is replaced (but
-# retains the original commit message.)
+# a branch called "squashed/<current-branch>" (unless specified with the second
+# command line argument). If this branch doesn't exist, a new commit will be
+# made. If the branch exists, the commit is replaced (but retains the original
+# commit message.)
 #
 set -e
 die() { echo "$*" >&2 ; exit 1 ; }
 
 main_branch="$1"
 if [ -z "$main_branch" ]; then
-    die "Usage: $0 <main branch>"
+    die "Usage: $0 <main branch> [<new branch name>]"
 fi
 
 if ! git rev-parse --verify "$main_branch" >/dev/null 2>&1 ; then
@@ -20,7 +21,7 @@ if ! git rev-parse --verify "$main_branch" >/dev/null 2>&1 ; then
 fi
 
 current_branch="$(git branch --show-current)"
-new_branch="squashed/$current_branch"
+new_branch="${2:-squashed/$current_branch}"
 
 merge_base="$(git merge-base "$main_branch" "$current_branch")"
 if [ -z "$merge_base" ]; then

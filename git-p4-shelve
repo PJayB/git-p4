@@ -42,6 +42,12 @@ usage() {
         --help                      Print this help and quit.
 
     Options:
+        --squash            -s      Squash the current branch into a new branch,
+                                    'p4-squashed/<current branch name>', before
+                                    performing any actions. The squashed branch
+                                    will be shelved instead. (Commits cannot be
+                                    specified with --squash.)
+
         --client <client>   -c      Set the p4 client. By default, this will be
                                     assumed from the 'git-p4.client' git config,
                                     or \$P4CLIENT).
@@ -224,6 +230,7 @@ while [[ $1 =~ ^-.* ]]; do
     --client|-c) validate_arg_2 "$1" "$2"; p4_client="$2" ; shift ;;
     --dry-run|-n) do_dry_run="yes" ;;
     --print|-p) operation="print" ;;
+    --squash|-s) autosquash="yes" ;;
     --shelve-new|-N) operation="shelve-new" ;;
     --update-existing|-E) operation="update-existing" ;;
     --update-or-shelve|-U) operation="update-or-shelve" ;;
@@ -233,19 +240,30 @@ while [[ $1 =~ ^-.* ]]; do
     shift
 done
 
-git_commits=( )
-while [ -n "$1" ]; do
-    if [[ "$1" == *..* ]]; then
-        readarray -t new_git_commits < <(git rev-list "$1")
-        git_commits+=( "${new_git_commits[@]}" )
-    elif read < <(git branch --list "$1"); then
-        readarray -t new_git_commits < <(git rev-list "p4/master..$1")
-        git_commits+=( "${new_git_commits[@]}" )
-    else
-        git_commits+=( "$1" )
+if [ "$autosquash" = "yes" ]; then
+    if [ -n "$1" ]; then
+        die "--squash is incompatible with other parameters."
     fi
-    shift
-done
+    # Squash all commits into a new branch, and then shelve the branch
+    branch_name="p4-squashed/$(git branch --show-current)"
+    if git-autosquash p4/master "$branch_name"; then
+        git_commits=( "$branch_name" )
+    fi
+else
+    git_commits=( )
+    while [ -n "$1" ]; do
+        if [[ "$1" == *..* ]]; then
+            readarray -t new_git_commits < <(git rev-list "$1")
+            git_commits+=( "${new_git_commits[@]}" )
+        elif read < <(git branch --list "$1"); then
+            readarray -t new_git_commits < <(git rev-list "p4/master..$1")
+            git_commits+=( "${new_git_commits[@]}" )
+        else
+            git_commits+=( "$1" )
+        fi
+        shift
+    done
+fi
 
 if [[ "${#git_commits[@]}" = "0" ]]; then
     readarray -t git_commits < <(git rev-list --reverse p4/master..HEAD)
