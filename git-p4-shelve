@@ -45,8 +45,9 @@ print_usage() {
         --squash            -s      Squash the current branch into a new branch,
                                     'p4-squashed/<current branch name>', before
                                     performing any actions. The squashed branch
-                                    will be shelved instead. (Commits cannot be
-                                    specified with --squash.)
+                                    will be shelved instead. Commits cannot be
+                                    specified with --squash, but a P4 changelist
+                                    can be specified instead.
 
         --client <client>   -c      Set the p4 client. By default, this will be
                                     assumed from the 'git-p4.client' git config,
@@ -249,7 +250,7 @@ while [[ $1 =~ ^-.* ]]; do
     --) shift ; break ;;
 
     # Autosquash options
-    -r|--force) autosquash_options+=( "$1" ) ; shift ;;
+    -r|--force) autosquash_options+=( "$1" ) ;;
     -m|-F)      autosquash_options+=( "$1" "$2" ) ; shift ;;
 
     *) usage_error ;;
@@ -260,6 +261,9 @@ done
 if [ "$autosquash" = "yes" ]; then
     if [[ $1 =~ ^[0-9]+$ ]]; then
         squash_p4_commit="=$1"
+        if [ "$operation" = "shelve-new" ]; then
+            die "Cannot --shelve-new to an existing changelist number."
+        fi
     elif [ -n "$1" ]; then
         die "--squash is incompatible with other parameters."
     fi
