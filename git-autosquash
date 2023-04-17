@@ -1,0 +1,70 @@
+#/bin/bash
+#
+# A utility to squash all commits into a single commit on another branch.
+#
+# All commits since the specified commit or branch will be squashed into
+# a branch called "squashed/<current-branch>". If this branch doesn't exist,
+# a new commit will be made. If the branch exists, the commit is replaced (but
+# retains the original commit message.)
+#
+set -e
+die() { echo "$*" >&2 ; exit 1 ; }
+
+main_branch="$1"
+if [ -z "$main_branch" ]; then
+    die "Usage: $0 <main branch>"
+fi
+
+if ! git rev-parse --verify "$main_branch" >/dev/null 2>&1 ; then
+    die "'$main_branch' isn't a git branch."
+fi
+
+current_branch="$(git branch --show-current)"
+new_branch="squashed/$current_branch"
+
+merge_base="$(git merge-base "$main_branch" "$current_branch")"
+if [ -z "$merge_base" ]; then
+    die "Couldn't find merge base between '$main_branch' and '$current_branch'"
+fi
+
+# Ensure this branch has at least one commit in it
+commit_diffs="$(git rev-list "$main_branch..$current_branch")"
+if [ -z "$commit_diffs" ]; then
+    die "'$current_branch' doesn't have any commits."
+fi
+
+# Restore current branch after exiting
+trap "git switch '$current_branch' 2>/dev/null || \
+    die 'Failed to switch back to $current_branch'" EXIT
+
+# If the branch exists, take the commit message from it
+if git rev-parse --verify "$new_branch" >/dev/null 2>&1 ; then
+    # Existing branch
+    git switch "$new_branch"
+
+    # Ensure the branch has at least one commit in it
+    readarray -t original_commits < <(git rev-list "$main_branch..$new_branch")
+    if [[ ${#original_commits[@]} = 0 ]]; then
+        die "'$new_branch' doesn't have any commits. Delete the branch first."
+    elif [[ ${#original_commits[@]} > 1 ]]; then
+        die "'$new_branch' already has too many commits in it. Aborting."
+    fi
+
+    # Reset to current branch
+    git reset --hard "$current_branch"
+
+    # Reset to the start point
+    git reset --soft "$merge_base"
+
+    # Make a new commit
+    if git commit --reuse-message="${original_commits[@]}"; then
+        echo "Squashed to existing branch '$new_branch'"
+    fi
+else
+    # New branch
+    git switch -C "$new_branch"
+    git reset --soft "$merge_base"
+    if git commit; then
+        echo "Squashed to new branch '$new_branch'"
+    fi
+fi
