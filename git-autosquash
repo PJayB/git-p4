@@ -99,6 +99,9 @@ then
     # Make a new commit
     if [ "$git_steal_commit_msg" = "yes" ]; then
         git_commit_args+=( --reuse-message="${original_commits[@]}" )
+        if [ "yes" = "$git_edit_commit_msg" ]; then
+            git_commit_args+=( '--quiet' )
+        fi
     fi
     if git commit "${git_commit_args[@]}"; then
         echo "Squashed to existing branch '$new_branch'"
@@ -109,7 +112,7 @@ else
     # New branch
     if [ "$git_steal_commit_msg" = "yes" ]; then
         # Get the commit message from the current branch
-        git_commit_args+=( --reuse-message="${current_branch[@]}" )
+        git_commit_args+=( --quiet --reuse-message="${current_branch[@]}" )
         # Force this on, as it's likely we'll want to edit this
         git_edit_commit_msg=yes
     else
