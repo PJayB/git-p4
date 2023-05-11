@@ -112,7 +112,8 @@ else
     # New branch
     if [ "$git_steal_commit_msg" = "yes" ]; then
         # Get the commit message from the current branch
-        git_commit_args+=( --quiet --reuse-message="${current_branch[@]}" )
+        commit_msg=$(git log -s --format="%s%n" "$main_branch..$current_branch")
+        git_commit_args+=( --quiet -m "${commit_msg}" )
         # Force this on, as it's likely we'll want to edit this
         git_edit_commit_msg=yes
     else
