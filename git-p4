@@ -54,6 +54,17 @@ import time
 import zipfile
 import zlib
 
+# PJayB: if environment variable is set, enable listening for a debugger to
+# attach
+debugAttachMode = os.getenv("GIT_P4_DEBUG_MODE")
+if debugAttachMode and debugAttachMode != "0":
+    import debugpy
+    debugPort = os.getenv("GIT_P4_DEBUG_PORT") or 5678
+    debugpy.listen(int(debugPort))
+    print(f"git-p4: debugger can attach on port {debugPort}...")
+    if debugAttachMode == "wait":
+        debugpy.wait_for_client()
+
 # On python2.7 where raw_input() and input() are both available,
 # we want raw_input's semantics, but aliased to input for python3
 # compatibility
