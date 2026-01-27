@@ -593,6 +593,27 @@ def p4_reopen_in_change(changelist, files):
 def p4_move(src, dest):
     p4_system(["move", "-k", wildcard_encode(src), wildcard_encode(dest)])
 
+# Apply "operation" to a list of files
+def p4_batch(operation: str, files: list[str]):
+    if not files:
+        return
+
+    # Chunk up cmd if too long for system limits
+    cmdLineLimit = 2048 if platform.system() == 'Windows' else 131072
+    while files:
+        cmdArgs = []
+        cmdLineLen = len(operation) + 1
+        while files:
+            encodedFile = wildcard_encode(files[0])
+            if cmdLineLen + len(encodedFile) + 1 > cmdLineLimit:
+                break
+            cmdArgs += [encodedFile]
+            cmdLineLen += len(encodedFile) + 1
+            files = files[1:]
+
+        # Execute the command for this batch
+        if cmdArgs:
+            p4_system([operation] + cmdArgs)
 
 def p4_last_change():
     results = p4CmdList(["changes", "-m", "1"], skip_info=True)
@@ -2191,7 +2212,6 @@ class P4Submit(Command, P4UserMap):
             all_files.append(path)
 
             if modifier == "M":
-                p4_edit(path)
                 if isModeExecChanged(diff['src_mode'], diff['dst_mode']):
                     filesToChangeExecBit[path] = diff['dst_mode']
                 editedFiles.add(path)
@@ -2254,13 +2274,14 @@ class P4Submit(Command, P4UserMap):
                 die("unknown modifier %s for %s" % (modifier, path))
 
         diffcmd = "git diff-tree --full-index -p \"%s\"" % (id)
-        patchcmd = diffcmd + " | git apply "
+        patchcmd = diffcmd + " | git apply --ignore-whitespace "
         tryPatchCmd = patchcmd + "--check -"
+        tryPatchVerboseCmd = patchcmd + "--check --verbose -"
         applyPatchCmd = patchcmd + "--check --apply -"
         patch_succeeded = True
 
         if verbose:
-            print("TryPatch: %s" % tryPatchCmd)
+            print("TryPatch: %s" % tryPatchVerboseCmd)
 
         if os.system(tryPatchCmd) != 0:
             fixed_rcs_keywords = False
@@ -2300,12 +2321,24 @@ class P4Submit(Command, P4UserMap):
                 print("Retrying the patch with RCS keywords cleaned up")
                 if os.system(tryPatchCmd) == 0:
                     patch_succeeded = True
-                    print("Patch succeesed this time with RCS keywords cleaned")
+                    print("Patch succeeded this time with RCS keywords cleaned")
 
         if not patch_succeeded:
+            print("Diff failed to apply. Edited files in changelist:")
             for f in editedFiles:
-                p4_revert(f)
+                # Try diffing each individual file to give more info
+                # Diff each file against what is in the git commit
+                individualTryPatchCmd = diffcmd + " -- " + wildcard_encode(f) + " | git apply --check -"
+                os.system(individualTryPatchCmd)
+
+            gitDir=os.environ.get('GIT_DIR', '')
+            if gitDir:
+                gitDir="GIT_DIR='%s'" % gitDir
+            print(f"Try the diff yourself with:\n  {gitDir} {tryPatchVerboseCmd}")
             return False
+
+        # Check out editable files before we start
+        p4_batch("edit", list(editedFiles))
 
         #
         # Apply the patch for real, and do add/delete/+x handling.
@@ -2314,11 +2347,9 @@ class P4Submit(Command, P4UserMap):
 
         for f in filesToChangeType:
             p4_edit(f, "-t", "auto")
-        for f in filesToAdd:
-            p4_add(f)
-        for f in filesToDelete:
-            p4_revert(f)
-            p4_delete(f)
+        p4_batch("add", list(filesToAdd))
+        p4_batch("revert", list(filesToDelete))
+        p4_batch("delete", list(filesToDelete))
 
         # Set/clear executable bits
         for f in filesToChangeExecBit.keys():
@@ -2459,10 +2490,8 @@ class P4Submit(Command, P4UserMap):
                 else:
                     print("Submission cancelled, undoing p4 changes.")
                 sys.stdout.flush()
-                for f in editedFiles | filesToDelete:
-                    p4_revert(f)
+                p4_batch("revert", list(editedFiles | filesToDelete | filesToAdd))
                 for f in filesToAdd:
-                    p4_revert(f)
                     os.remove(f)
 
             if not self.prepare_p4_only:
