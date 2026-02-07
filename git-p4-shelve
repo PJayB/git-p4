@@ -121,7 +121,8 @@ git_exec_or_dry_run() {
 }
 
 commit_new_shelves() {
-    local cmdline=( git p4 submit --shelve --disable-rebase --disable-p4sync )
+    local cmdline=( git p4 submit --shelve --disable-rebase --disable-p4sync
+        --force-shelve )
     for i in "$@"; do
         cmdline+=( --commit "$i" )
     done
@@ -140,7 +141,8 @@ commit_update_mapped_shelves() {
     for i in "$@"; do
         readarray -d '=' -t commit_map < <(echo -n "$i")
         local cmdline=( git p4 submit -v --update-shelve "${commit_map[1]}"
-             --disable-rebase --disable-p4sync --commit "${commit_map[0]}" )
+             --disable-rebase --disable-p4sync  --force-shelve
+             --commit "${commit_map[0]}" )
         git_exec_or_dry_run "${cmdline[@]}"
     done
 }

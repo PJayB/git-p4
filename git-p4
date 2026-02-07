@@ -1829,6 +1829,8 @@ class P4Submit(Command, P4UserMap):
                                      help="Skip Perforce sync of p4/master after submit or shelve"),
                 optparse.make_option("--no-verify", dest="no_verify", action="store_true",
                                      help="Bypass p4-pre-submit and p4-changelist hooks"),
+                optparse.make_option("--force-shelve", dest="force_shelve", action="store_true",
+                                     help="Shelve even if the patch can't be applied cleanly"),
         ]
         self.description = """Submit changes from git to the perforce depot.\n
     The `p4-pre-submit` hook is executed if it exists and is executable. It
@@ -1878,6 +1880,7 @@ class P4Submit(Command, P4UserMap):
         self.p4HasMoveCommand = p4_has_move_command()
         self.branch = None
         self.no_verify = False
+        self.force_shelve = False
 
         if gitConfig('git-p4.largeFileSystem'):
             die("Large file system not supported for git-p4 submit command. Please remove it from config.")
@@ -2186,6 +2189,28 @@ class P4Submit(Command, P4UserMap):
 
         return (diff + newdiff).replace('\r\n', '\n')
 
+    @staticmethod
+    def clobberWithGitFile(file: str, revision: str):
+        """
+        Overwrite the given file with the contents from git at the specified revision.
+        Returns True on success, False on failure.
+        """
+        try:
+            # Ensure all of the path for the file exists
+            os.makedirs(os.path.dirname(file), exist_ok=True)
+
+            # Read the file from git and output it into the corresponding p4
+            # depot file
+            retcode, out, err = read_pipe_full(
+                ["git", "show", f"{revision}:{file}"])
+            if retcode != 0:
+                return (retcode, err)
+            with open(file, "wb") as outFile:
+                outFile.write(out)
+            return (0, None)
+        except OSError as e:
+            return (e.errno, e.strerror)
+
     def applyCommit(self, id):
         """Apply one commit, return True if it succeeded."""
 
@@ -2323,19 +2348,25 @@ class P4Submit(Command, P4UserMap):
                     patch_succeeded = True
                     print("Patch succeeded this time with RCS keywords cleaned")
 
+        isShelving = len(self.update_shelve) > 0 or self.shelve
+
         if not patch_succeeded:
             print("Diff failed to apply. Edited files in changelist:")
             for f in editedFiles:
                 # Try diffing each individual file to give more info
                 # Diff each file against what is in the git commit
+                print(f"----- Patch for '{f}' -----")
                 individualTryPatchCmd = diffcmd + " -- " + wildcard_encode(f) + " | git apply --check -"
                 os.system(individualTryPatchCmd)
 
             gitDir=os.environ.get('GIT_DIR', '')
             if gitDir:
                 gitDir="GIT_DIR='%s'" % gitDir
-            print(f"Try the diff yourself with:\n  {gitDir} {tryPatchVerboseCmd}")
-            return False
+            print(f"\nTry the diff yourself with:\n  {gitDir} {tryPatchVerboseCmd}")
+
+            # Abort if we're not shelving or not forcing a shelf
+            if not isShelving or not self.force_shelve:
+                return False
 
         # Check out editable files before we start
         p4_batch("edit", list(editedFiles))
@@ -2343,7 +2374,16 @@ class P4Submit(Command, P4UserMap):
         #
         # Apply the patch for real, and do add/delete/+x handling.
         #
-        system(applyPatchCmd, shell=True)
+        if patch_succeeded:
+            system(applyPatchCmd, shell=True)
+        else:
+            # The only way we got here is if we're force-shelving.
+            # Clobber all files.
+            for f in editedFiles | filesToAdd:
+                retcode, err = self.clobberWithGitFile(f, id)
+                if retcode:
+                    print(f"Failed to force-apply '{f}': {err}")
+                    return False
 
         for f in filesToChangeType:
             p4_edit(f, "-t", "auto")
