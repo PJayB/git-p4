@@ -2368,6 +2368,9 @@ class P4Submit(Command, P4UserMap):
             if not isShelving or not self.force_shelve:
                 return False
 
+        # Sync changed files
+        p4_batch("sync", list(editedFiles | filesToDelete))
+
         # Check out editable files before we start
         p4_batch("edit", list(editedFiles))
 
@@ -2687,15 +2690,6 @@ class P4Submit(Command, P4UserMap):
             os.makedirs(self.clientPath)
 
         chdir(self.clientPath, is_client_path=True)
-        if self.dry_run:
-            print("Would synchronize p4 checkout in %s" % self.clientPath)
-        else:
-            print("Synchronizing p4 checkout...")
-            if new_client_dir:
-                # old one was destroyed, and maybe nobody told p4
-                p4_sync("...", "-f")
-            else:
-                p4_sync("...")
         self.check()
 
         commits = []
