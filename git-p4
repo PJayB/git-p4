@@ -236,8 +236,8 @@ if bytes is not str:
                 # Default utf-8 encoding
                 return s.decode()
             except UnicodeDecodeError:
-                # Try Windows encoding
-                return s.decode(encoding='windows-1252')
+                # Try Windows encoding as a last best effort
+                return s.decode(encoding='windows-1252', errors='ignore')
         else:
             return s
 
