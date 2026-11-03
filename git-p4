@@ -2197,19 +2197,25 @@ class P4Submit(Command, P4UserMap):
         """
         try:
             # Ensure all of the path for the file exists
-            os.makedirs(os.path.dirname(file), exist_ok=True)
+            dir = os.path.dirname(file)
+            if dir:
+                os.makedirs(dir, exist_ok=True)
+        except OSError as e:
+            return (e.errno, f'Error with makedirs {file}: {e.strerror}')
 
-            # Read the file from git and output it into the corresponding p4
-            # depot file
-            retcode, out, err = read_pipe_full(
-                ["git", "show", f"{revision}:{file}"])
-            if retcode != 0:
-                return (retcode, err)
+        # Read the file from git and output it into the corresponding p4
+        # depot file
+        retcode, out, err = read_pipe_full(
+            ["git", "show", f"{revision}:{file}"])
+        if retcode != 0:
+            return (retcode, f'git show {revision}:{file}: {err}')
+
+        try:
             with open(file, "wb") as outFile:
                 outFile.write(out)
             return (0, None)
         except OSError as e:
-            return (e.errno, e.strerror)
+            return (e.errno, f'Error with file {file}: {e.strerror}')
 
     def applyCommit(self, id):
         """Apply one commit, return True if it succeeded."""
