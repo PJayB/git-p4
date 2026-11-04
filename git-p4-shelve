@@ -56,6 +56,20 @@ print_usage() {
         --dry-run           -n      Don't actually do anything. Just print what
                                     would be done.
 
+        --changelist <how>          How to find the changelist that corresponds
+                                    to a commit. One of:
+                                      auto        Match by leading '[TAG]' in
+                                                  the description; if that
+                                                  finds nothing or is
+                                                  ambiguous, match by full
+                                                  description. (default)
+                                      match-tag   Match by leading '[TAG]' only.
+                                      match-desc  Match by full description
+                                                  only.
+                                      <CL#>       Use this changelist (a
+                                                  single commit only).
+                                    Ambiguous matches are an error.
+
     Commits:
         Commits can be a single commit hash, a range, or other refspec parseable
         by git, e.g.
@@ -96,19 +110,73 @@ get_p4_cl_description() {
         sed -r 's/^[[:space:]]*//g'
 }
 
-find_p4_cl_for_git_commit() {
-    local git_commit="$1"
-    local git_commit_message="$(git log --format=%B -n 1 "${git_commit}")"
-    local git_commit_message_short="${git_commit_message:0:25}"
+# Prints the leading "[TAG]" of a description, if it has one.
+get_description_tag() {
+    local description="$1"
+    local tag_regex='^\[[^]]+\]'
+    if [[ "$description" =~ $tag_regex ]]; then
+        echo "${BASH_REMATCH[0]}"
+    fi
+}
+
+# Prints every pending changelist that matches a commit message, either by
+# leading [TAG] ("tag") or by full description ("desc").
+find_p4_cls_by_method() {
+    local method="$1"
+    local git_commit_message="$2"
+    local needle
+
+    if [ "$method" = "tag" ]; then
+        needle="$(get_description_tag "$git_commit_message")"
+        [ -n "$needle" ] || return 0
+    else
+        needle="${git_commit_message:0:25}"
+    fi
 
     while read -r change ; do
         local p4_cl_description="$(get_p4_cl_description "$change")"
-        if [ "$p4_cl_description" = "$git_commit_message" ]; then
-            echo "$change"
-            return 0
+        if [ "$method" = "tag" ]; then
+            [ "$(get_description_tag "$p4_cl_description")" = "$needle" ] \
+                && echo "$change"
+        else
+            [ "$p4_cl_description" = "$git_commit_message" ] \
+                && echo "$change"
         fi
-    done < <(echo "$p4_changes" | grep -F "$git_commit_message_short" | \
-        awk '{print $2}')
+    done < <(echo "$p4_changes" | grep -F "$needle" | awk '{print $2}')
+}
+
+# Returns 0 and prints the changelist if found, 1 if there is no match, and 2
+# if the match is ambiguous.
+find_p4_cl_for_git_commit() {
+    local git_commit="$1"
+    local git_commit_message="$(git log --format=%B -n 1 "${git_commit}")"
+    local methods=( )
+    local method
+    local matches
+
+    case "$changelist_mode" in
+    auto) methods=( tag desc ) ;;
+    match-tag) methods=( tag ) ;;
+    match-desc) methods=( desc ) ;;
+    esac
+
+    for method in "${methods[@]}"; do
+        readarray -t matches < <(find_p4_cls_by_method "$method" \
+            "$git_commit_message")
+        if [[ "${#matches[@]}" = "1" ]]; then
+            echo "${matches[0]}"
+            return 0
+        elif [[ "${#matches[@]}" = "0" ]]; then
+            continue
+        fi
+        # In auto mode an ambiguous tag falls through to the description.
+        if [ "$changelist_mode" = "auto" ] && [ "$method" = "tag" ]; then
+            continue
+        fi
+        warn "Ambiguous: $git_commit matches multiple changelists by $method:" \
+            "${matches[*]}. Consider mapping with '$git_commit=<CL#>'."
+        return 2
+    done
     return 1
 }
 
@@ -169,8 +237,14 @@ get_git_commit_and_p4_cl_search() {
 
     if [ -n "${commit_map[1]}" ]; then
         export "$p4_cl_var=${commit_map[1]}"
+    elif [[ "$changelist_mode" =~ ^[0-9]+$ ]]; then
+        export "$p4_cl_var=$changelist_mode"
     else
-        export "$p4_cl_var=$(find_p4_cl_for_git_commit "$git_commit")"
+        local found
+        local rc=0
+        found="$(find_p4_cl_for_git_commit "$git_commit")" || rc=$?
+        [ "$rc" != "2" ] || exit 1
+        export "$p4_cl_var=$found"
     fi
 }
 
@@ -235,6 +309,7 @@ operation_update_or_shelve() {
 }
 
 operation="print"
+changelist_mode="auto"
 
 autosquash_options=( )
 
@@ -242,6 +317,8 @@ while [[ $1 =~ ^-.* ]]; do
     case "$1" in
     --user|-u) validate_arg_2 "$1" "$2"; p4_user="$2" ; shift ;;
     --client|-c) validate_arg_2 "$1" "$2"; p4_client="$2" ; shift ;;
+    --changelist=*) changelist_mode="${1#*=}" ;;
+    --changelist) validate_arg_2 "$1" "$2"; changelist_mode="$2" ; shift ;;
     --dry-run|-n) do_dry_run="yes" ;;
     --print|-p) operation="print" ;;
     --squash|-s) autosquash="yes" ;;
@@ -296,6 +373,15 @@ fi
 
 if [[ "${#git_commits[@]}" = "0" ]]; then
     readarray -t git_commits < <(git rev-list --reverse p4/master..HEAD)
+fi
+
+[[ "$changelist_mode" =~ ^(auto|match-tag|match-desc|[0-9]+)$ ]] || \
+    die "--changelist: expected auto, match-tag, match-desc or a CL number."
+if [[ "$changelist_mode" =~ ^[0-9]+$ ]]; then
+    [[ "${#git_commits[@]}" = "1" ]] || \
+        die "--changelist <CL#> requires exactly one commit."
+    [ "$operation" != "shelve-new" ] || \
+        die "Cannot --shelve-new to an existing changelist number."
 fi
 
 [ -n "$p4_client" ] || p4_client="$(git config --get git-p4.client)"
